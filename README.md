@@ -18,4 +18,6 @@ Mejorar la estructura del código siguiendo principios de desarrollo limpio (cle
 - Nombres descriptivos y coherentes.
 - Eliminación de código redundante y comentarios superfluos.
 
+---
 
+¡Este proyecto es un buen ejemplo de cómo pequeñas mejoras pueden tener un gran impacto en la calidad del software!
