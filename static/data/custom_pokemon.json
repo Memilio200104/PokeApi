@@ -1,0 +1,15 @@
+[
+  {
+    "number": 0,
+    "name": "Martin",
+    "type": "normal",
+    "height": 90,
+    "weight": 90,
+    "sprite": "/static/img/gun.jpg",
+    "moves": [
+      {"name": "punch", "level": 1},
+      {"name": "kick", "level": 10},
+      {"name": "gun-blast", "level": 50}
+    ]
+  }
+]

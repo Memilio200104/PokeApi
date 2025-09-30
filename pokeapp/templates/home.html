@@ -1,0 +1,39 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokedex papu pro 9000</title>
+    <link rel="stylesheet" href="{% static 'css/main.css' %}">
+</head>
+<body>
+    <div class="gba-frame">
+        <video id="intro" autoplay muted playsinline class="intro">
+            <source src="{% static 'video/intro.mp4' %}" type="video/mp4">
+            Tu navegador no soporta video HTML5.
+        </video>
+
+        <div id="pokedex-content" class="hidden">
+            <form id="pokemon-form">
+                {% csrf_token %}
+                <input type="text" name="pokemon" id="pokemon-input" placeholder="Escribe un Pokémon o ID">
+                <button type="submit">Buscar</button>
+            </form>
+
+            <div id="nav-arrows" class="nav-arrows hidden" aria-label="Navegación por Pokémon">
+                <button id="prev-btn" type="button" aria-label="Anterior">◀</button>
+                <button id="next-btn" type="button" aria-label="Siguiente">▶</button>
+            </div>
+            <div id="pokemon-result"></div>
+        </div>
+    </div>
+
+    <audio id="bg-music" loop>
+        <source src="{% static 'audio/song.mp3' %}" type="audio/mpeg">
+    </audio>
+
+    <script src="{% static 'js/main.js' %}"></script>
+</body>
+</html>
