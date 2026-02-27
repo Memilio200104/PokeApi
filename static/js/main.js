@@ -37,49 +37,77 @@ window.addEventListener("load", () => {
     }, 4000);
 });
 
-/* ---------- Fetch helpers ---------- */
+/* ---------- Fetch helpers con 3 endpoints ---------- */
 async function fetchPokemon(query) {
     if (!query || isLoading) return;
     isLoading = true;
     setLoadingState(true);
 
-    const formData = new FormData();
-    // El backend acepta nombre o número
-    formData.append("pokemon", String(query));
-
     try {
-        const response = await fetch("/", {
+        // ENDPOINT 2: Búsqueda de Pokémon
+        const formData = new FormData();
+        formData.append("pokemon", String(query));
+
+        const response = await fetch("/api/pokemon/search/", {
             method: "POST",
             headers: {
                 "X-Requested-With": "XMLHttpRequest",
-                "X-CSRFToken": document.querySelector('input[name="csrfmiddlewaretoken"]').value
+                "X-CSRFToken": getCSRFToken()
             },
             body: formData
         });
 
-        if (!response.ok) {
-            throw new Error("Respuesta no OK");
-        }
         const data = await response.json();
 
-        if (data.error) {
-            renderError(data.error);
-        } else {
-            renderPokemon(data);
+        if (!response.ok) {
+            throw new Error(data.error || "Respuesta no OK");
         }
+
+        // ENDPOINT 3: Cargar movimientos por separado
+        const movesData = await fetchPokemonMoves(data.name.toLowerCase());
+        data.moves = movesData;
+        
+        renderPokemon(data);
+        
     } catch (err) {
         console.error("Error AJAX:", err);
-        renderError("No se pudo obtener la información.");
+        renderError(err.message || "No se pudo obtener la información.");
     } finally {
         setLoadingState(false);
         isLoading = false;
     }
 }
 
+// ENDPOINT 3: Obtener movimientos del Pokémon
+async function fetchPokemonMoves(pokemonName) {
+    try {
+        const response = await fetch(`/api/pokemon/${pokemonName}/moves/`);
+        const data = await response.json();
+        
+        if (response.ok) {
+            return data.moves || [];
+        } else {
+            console.error('Error cargando movimientos:', data.error);
+            return [];
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        return [];
+    }
+}
+
 function setLoadingState(loading) {
-    // opcional: spinner, deshabilitar botones
     prevBtn.disabled = loading;
     nextBtn.disabled = loading;
+    
+    // Mostrar/ocultar loading state en el input
+    if (loading) {
+        input.disabled = true;
+        form.querySelector('button').textContent = 'Buscando...';
+    } else {
+        input.disabled = false;
+        form.querySelector('button').textContent = 'Buscar';
+    }
 }
 
 /* ---------- Render helpers ---------- */
@@ -89,12 +117,44 @@ function renderPokemon(data) {
     resultDiv.innerHTML = `
         <div class="pokemon-info">
             <h2>${data.name} (#${data.number})</h2>
-            <p>Tipo: ${data.type}</p>
-            <p>Altura: ${data.height}</p>
-            <p>Peso: ${data.weight}</p>
-            <img src="${data.sprite}" alt="${data.name}">
+            <p><strong>Tipo:</strong> ${data.type.toUpperCase()}</p>
+            <p><strong>Altura:</strong> ${data.height / 10} m</p>
+            <p><strong>Peso:</strong> ${data.weight / 10} kg</p>
+            <img src="${data.sprite}" alt="${data.name}" 
+                 onerror="this.src='/static/img/pokemon-placeholder.png'">
+            
+            ${data.moves && data.moves.length > 0 ? `
+                <button id="show-moves-btn">Ver Habilidades (${data.moves.length})</button>
+                <div id="moves-list" class="hidden"></div>
+            ` : '<p>No hay movimientos disponibles</p>'}
         </div>
     `;
+
+    // Configurar botón de movimientos si existe
+    const btn = document.getElementById("show-moves-btn");
+    const movesDiv = document.getElementById("moves-list");
+
+    if (btn && movesDiv) {
+        btn.addEventListener("click", () => {
+            if (movesDiv.classList.contains("hidden")) {
+                const movesToShow = data.moves.slice(0, 15); // Mostrar primeros 15
+                movesDiv.innerHTML = `
+                    <h3>Movimientos por Nivel</h3>
+                    <ul>
+                        ${movesToShow.map(m => 
+                            `<li><strong>Nv. ${m.level}</strong> - ${m.name.replace(/-/g, ' ')}</li>`
+                        ).join("")}
+                        ${data.moves.length > 15 ? `<li><em>... y ${data.moves.length - 15} movimientos más</em></li>` : ''}
+                    </ul>
+                `;
+                movesDiv.classList.remove("hidden");
+                btn.textContent = "Ocultar Habilidades";
+            } else {
+                movesDiv.classList.add("hidden");
+                btn.textContent = `Ver Habilidades (${data.moves.length})`;
+            }
+        });
+    }
 
     // Mostrar flechas al tener un resultado válido
     navArrows.classList.remove("hidden");
@@ -102,30 +162,37 @@ function renderPokemon(data) {
 }
 
 function renderError(msg) {
-    resultDiv.innerHTML = `<p>${msg}</p>`;
-    if (currentId !== null) {
-        navArrows.classList.remove("hidden");
-    }
+    resultDiv.innerHTML = `
+        <div class="pokemon-info">
+            <p class="error">${msg}</p>
+        </div>
+    `;
+    navArrows.classList.add("hidden");
 }
 
 function updateArrowState() {
-    prevBtn.disabled = isLoading;
+    prevBtn.disabled = isLoading || currentId <= 1;
+    // Nota: Para nextBtn podrías agregar un límite máximo si lo conoces
     nextBtn.disabled = isLoading;
 }
 
+/* ---------- Event Listeners ---------- */
 prevBtn.addEventListener("click", () => {
-    if (currentId && !isLoading) {
+    if (currentId && currentId > 1 && !isLoading) {
         fetchPokemon(currentId - 1);
     }
 });
+
 nextBtn.addEventListener("click", () => {
     if (currentId && !isLoading) {
         fetchPokemon(currentId + 1);
     }
 });
+
 document.addEventListener("keydown", (e) => {
     if (!pokedex || pokedex.style.display === "none") return;
-    if (e.key === "ArrowLeft" && currentId && !isLoading) {
+    
+    if (e.key === "ArrowLeft" && currentId && currentId > 1 && !isLoading) {
         e.preventDefault();
         fetchPokemon(currentId - 1);
     } else if (e.key === "ArrowRight" && currentId && !isLoading) {
@@ -140,46 +207,27 @@ form.addEventListener("submit", (e) => {
     if (!query) return;
     fetchPokemon(query);
 });
-function renderPokemon(data) {
-    currentId = parseInt(data.number, 10);
 
-    resultDiv.innerHTML = `
-        <div class="pokemon-info">
-            <h2>${data.name} (#${data.number})</h2>
-            <p>Tipo: ${data.type}</p>
-            <p>Altura: ${data.height}</p>
-            <p>Peso: ${data.weight}</p>
-            <img src="${data.sprite}" alt="${data.name}">
-            <button id="show-moves-btn">Ver habilidades</button>
-            <div id="moves-list" class="hidden"></div>
-        </div>
-    `;
-
-    // Botón para mostrar habilidades
-    const btn = document.getElementById("show-moves-btn");
-    const movesDiv = document.getElementById("moves-list");
-
-    btn.addEventListener("click", () => {
-        if (movesDiv.classList.contains("hidden")) {
-            if (data.moves && data.moves.length > 0) {
-                movesDiv.innerHTML = `
-                    <h3>Movimientos por nivel</h3>
-                    <ul>
-                        ${data.moves.map(m => `<li>Nivel ${m.level}: ${m.name}</li>`).join("")}
-                    </ul>
-                `;
-            } else {
-                movesDiv.innerHTML = "<p>No hay movimientos disponibles.</p>";
-            }
-            movesDiv.classList.remove("hidden");
-            btn.textContent = "Ocultar habilidades";
-        } else {
-            movesDiv.classList.add("hidden");
-            btn.textContent = "Ver habilidades";
-        }
-    });
-
-    // Mostrar flechas
-    navArrows.classList.remove("hidden");
-    updateArrowState();
+/* ---------- Utilidades ---------- */
+function getCSRFToken() {
+    return document.querySelector('input[name="csrfmiddlewaretoken"]').value;
 }
+
+/* ---------- Efectos visuales adicionales ---------- */
+// Efecto de escritura en el input (opcional)
+input.addEventListener('focus', () => {
+    input.style.transform = 'scale(1.02)';
+    input.style.boxShadow = '0 0 10px rgba(42, 157, 143, 0.5)';
+});
+
+input.addEventListener('blur', () => {
+    input.style.transform = 'scale(1)';
+    input.style.boxShadow = 'none';
+});
+
+// Auto-seleccionar texto al hacer clic en el input
+input.addEventListener('click', function() {
+    this.select();
+}); 
+
+
