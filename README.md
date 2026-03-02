@@ -60,4 +60,3 @@ Durante el desarrollo se tomaron decisiones estrictas basadas en los lineamiento
 6. Acceder a `http://127.0.0.1:8000/` en el navegador.
 
 ---
-*Documentación generada para la entrega del proyecto final.*
