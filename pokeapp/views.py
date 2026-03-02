@@ -1,45 +1,81 @@
+import json
+import logging
+import urllib.request
+import urllib.error
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.views import View
-from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_exempt
-import urllib.request
-import json
+
+logger = logging.getLogger(__name__)
+
+class PokemonException(Exception):
+    """Clase base para errores controlados de la API de Pokémon."""
+    def __init__(self, message, status_code=400):
+        super().__init__(message)
+        self.status_code = status_code
+
+class InvalidPokemonName(PokemonException):
+    def __init__(self):
+        super().__init__("Proporciona un nombre o ID de Pokémon válido.", 400)
+
+class PokemonNotFound(PokemonException):
+    def __init__(self):
+        super().__init__("Pokémon no encontrado en la base de datos.", 404)
+
+class ExternalAPIError(PokemonException):
+    def __init__(self):
+        super().__init__("Error de comunicación con el servidor externo.", 502)
 
 
 class BasePokemonView(View):
-    #Vista base con funcionalidades comunes para Pokémon
+    """Vista base con la lógica común de peticiones y control global de errores."""
     
-    def _is_ajax(self, request):
-        """Detecta si la petición es AJAX"""
-        return (request.headers.get("x-requested-with") == "XMLHttpRequest" or 
-                "application/json" in request.headers.get("accept", ""))
+    def dispatch(self, request, *args, **kwargs):
+        """Punto de entrada global: intercepta y formatea todas las excepciones HTTP y de aplicación."""
+        try:
+            return super().dispatch(request, *args, **kwargs)
+        except PokemonException as e:
+            return self._error_response(str(e), e.status_code)
+        except Exception as e:
+            logger.error(f"Error crítico del servidor: {e}", exc_info=True)
+            return self._error_response("Error interno del servidor", 500)
 
-    def _fetch_pokemon_data(self, url):
-        """Obtiene datos de la PokeAPI"""
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        raw = urllib.request.urlopen(req).read()
-        return json.loads(raw)
+    def _normalize_name(self, name):
+        if not name:
+            raise InvalidPokemonName()
+        return str(name).strip().lower().replace(' ', '%20')
 
-    def _build_pokeapi_url(self, pokemon_name):
-        """Construye la URL para la PokeAPI"""
-        return f'https://pokeapi.co/api/v2/pokemon/{pokemon_name}'
+    def _fetch_pokemon_data(self, pokemon_name):
+        normalized_name = self._normalize_name(pokemon_name)
+        url = f'https://pokeapi.co/api/v2/pokemon/{normalized_name}'
+        
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            raw = urllib.request.urlopen(req).read()
+            return json.loads(raw)
+        except urllib.error.HTTPError as err:
+            if err.code == 404:
+                raise PokemonNotFound()
+            logger.error(f"HTTPError PokeAPI: {err.code}")
+            raise ExternalAPIError()
+        except Exception as err:
+            logger.error(f"Error inesperado PokeAPI: {err}")
+            raise ExternalAPIError()
 
     def _parse_pokemon_data(self, api_response):
-        """Parsea los datos básicos del Pokémon"""
+        """Extrae los atributos principales del payload completo del Pokémon."""
         return {
             "number": str(api_response['id']),
             "name": api_response['name'].capitalize(),
             "type": api_response['types'][0]['type']['name'],
-            "height": str(api_response['height']),
-            "weight": str(api_response['weight']),
+            "height": api_response['height'],
+            "weight": api_response['weight'],
             "sprite": api_response['sprites']['front_default'],
         }
 
     def _parse_moves(self, moves_data):
-        """Parsea los movimientos y obtiene detalles extra (poder, precisión, tipo)"""
+        """Filtra y detalla los movimientos aprendidos por nivel."""
         moves = []
-        # 1. Filtramos solo los movimientos por nivel
         for move_entry in moves_data:
             move_name = move_entry["move"]["name"]
             move_url = move_entry["move"]["url"]
@@ -51,18 +87,18 @@ class BasePokemonView(View):
                         "url": move_url,
                         "level": detail["level_learned_at"]
                     })
-                    break # Evita duplicados si lo aprende en varias versiones
+                    break 
         
-        # 2. Ordenamos por nivel
         moves = sorted(moves, key=lambda m: m["level"])
         
-        # 3. Hacemos una petición a la URL de cada movimiento para sacar poder, precisión y tipo
-        # (Limitamos a los primeros 20 para no sobrecargar la PokeAPI ni alentar tu app)
         detailed_moves = []
+        # Límite técnico: Restringimos a 20 iteraciones para evitar un cuello de botella en 
+        # las peticiones HTTP secuenciales y prevenir el bloqueo por rate-limit de la PokeAPI.
         for move in moves[:20]:
             try:
-                # Usamos tu misma función para consultar la URL específica del movimiento
-                move_details = self._fetch_pokemon_data(move["url"])
+                req = urllib.request.Request(move["url"], headers={'User-Agent': 'Mozilla/5.0'})
+                raw = urllib.request.urlopen(req).read()
+                move_details = json.loads(raw)
                 
                 detailed_moves.append({
                     "name": move["name"],
@@ -73,159 +109,64 @@ class BasePokemonView(View):
                     "pp": move_details.get("pp") or "--"
                 })
             except Exception as e:
-                print(f"Error al obtener detalle de {move['name']}: {e}")
+                logger.warning(f"No se pudo obtener detalle del movimiento {move['name']}: {e}")
                 
         return detailed_moves
 
     def _json_response(self, data, status=200):
-        """Devuelve una respuesta JSON estándar"""
         return JsonResponse(data, status=status)
 
     def _error_response(self, message, status=400):
-        """Devuelve una respuesta de error estándar"""
-        return self._json_response({"error": message}, status=status)
+        return self._json_response({"error": True, "message": message}, status=status)
 
 
 class HomeView(BasePokemonView):
-    """
-    - GET: Renderiza la interfaz web
-    """
+    """Renderiza la interfaz web principal de la Pokedex."""
     def get(self, request):
         return render(request, 'home.html')
 
-
 class PokemonSearchView(BasePokemonView):
-    """
-    Endpoint 2: Búsqueda de Pokémon
-    - POST: Busca un Pokémon por nombre o ID
-    """
+    """Endpoint API (POST) para buscar la información básica de un Pokémon."""
     def post(self, request):
-        pokemon_name = self._get_pokemon_name_from_request(request)
-        if not pokemon_name:
-            return self._error_response("Proporciona el nombre del Pokémon", 400)
-
-        try:
-            api_url = self._build_pokeapi_url(pokemon_name)
-            api_response = self._fetch_pokemon_data(api_url)
-            pokemon_data = self._parse_pokemon_data(api_response)
-            return self._json_response(pokemon_data)
-        except urllib.error.HTTPError as err:
-            if err.code == 404:
-                return self._error_response("Pokémon no encontrado", 404)
-            return self._error_response("Error al consultar PokeAPI", 502)
-        except Exception as err:
-            print(f"Error al consultar PokeAPI: {err}")
-            return self._error_response("Error interno del servidor", 500)
-
-    def _get_pokemon_name_from_request(self, request):
-        """Extrae y normaliza el nombre del Pokémon del request"""
-        name = request.POST.get('pokemon', '').strip().lower()
-        return name.replace(' ', '%20')
-
+        name = request.POST.get('pokemon', '')
+        api_response = self._fetch_pokemon_data(name)
+        pokemon_data = self._parse_pokemon_data(api_response)
+        return self._json_response(pokemon_data)
 
 class PokemonMovesView(BasePokemonView):
-    """
-    - GET: Obtiene los movimientos de un Pokémon por nombre o ID
-    """
+    """Endpoint API (GET) para obtener el listado detallado de movimientos."""
     def get(self, request, pokemon_name):
-        if not pokemon_name:
-            return self._error_response("Proporciona el nombre del Pokémon", 400)
-
-        try:
-            normalized_name = pokemon_name.strip().lower().replace(' ', '%20')
-            api_url = self._build_pokeapi_url(normalized_name)
-            api_response = self._fetch_pokemon_data(api_url)
-            
-            moves = self._parse_moves(api_response['moves'])
-            moves_data = {
-                "name": api_response['name'].capitalize(),
-                "number": str(api_response['id']),
-                "moves": moves
-            }
-            return self._json_response(moves_data)
-        except urllib.error.HTTPError as err:
-            if err.code == 404:
-                return self._error_response("Pokémon no encontrado", 404)
-            return self._error_response("Error al consultar PokeAPI", 502)
-        except Exception as err:
-            print(f"Error al consultar PokeAPI: {err}")
-            return self._error_response("Error interno del servidor", 500)
+        api_response = self._fetch_pokemon_data(pokemon_name)
+        moves = self._parse_moves(api_response['moves'])
+        
+        return self._json_response({
+            "name": api_response['name'].capitalize(),
+            "number": str(api_response['id']),
+            "moves": moves
+        })
 
 class PokemonStatsView(BasePokemonView):
-    """
-    Endpoint 3: Estadísticas del Pokémon
-    - GET: Obtiene las estadísticas base (HP, ataque, defensa, etc.)
-    """
+    """Endpoint API (GET) para obtener las estadísticas base."""
     def get(self, request, pokemon_name):
-        if not pokemon_name:
-            return self._error_response("Proporciona el nombre del Pokémon", 400)
-
-        try:
-            # Normalizamos el nombre y consultamos la API
-            normalized_name = pokemon_name.strip().lower().replace(' ', '%20')
-            api_url = self._build_pokeapi_url(normalized_name)
-            api_response = self._fetch_pokemon_data(api_url)
+        api_response = self._fetch_pokemon_data(pokemon_name)
+        stats = [{"name": s['stat']['name'], "base_stat": s['base_stat']} 
+                 for s in api_response.get('stats', [])]
             
-            # Extraemos solo la información de las estadísticas
-            stats = []
-            for stat_data in api_response.get('stats', []):
-                stats.append({
-                    "name": stat_data['stat']['name'],
-                    "base_stat": stat_data['base_stat']
-                })
-                
-            stats_data = {
-                "name": api_response['name'].capitalize(),
-                "number": str(api_response['id']),
-                "stats": stats
-            }
-            return self._json_response(stats_data)
-            
-        except urllib.error.HTTPError as err:
-            if err.code == 404:
-                return self._error_response("Pokémon no encontrado", 404)
-            return self._error_response("Error al consultar PokeAPI", 502)
-        except Exception as err:
-            print(f"Error al consultar PokeAPI: {err}")
-            return self._error_response("Error interno del servidor", 500)
-
+        return self._json_response({
+            "name": api_response['name'].capitalize(),
+            "number": str(api_response['id']),
+            "stats": stats
+        })
 
 class PokemonAbilitiesView(BasePokemonView):
-    """
-    Endpoint 4: Habilidades del Pokémon
-    - GET: Obtiene la lista de habilidades y si son ocultas
-    """
+    """Endpoint API (GET) para listar las habilidades y su estado (oculta o normal)."""
     def get(self, request, pokemon_name):
-        if not pokemon_name:
-            return self._error_response("Proporciona el nombre del Pokémon", 400)
-
-        try:
-            # Normalizamos el nombre y consultamos la API
-            normalized_name = pokemon_name.strip().lower().replace(' ', '%20')
-            api_url = self._build_pokeapi_url(normalized_name)
-            api_response = self._fetch_pokemon_data(api_url)
+        api_response = self._fetch_pokemon_data(pokemon_name)
+        abilities = [{"name": a['ability']['name'], "is_hidden": a['is_hidden']} 
+                     for a in api_response.get('abilities', [])]
             
-            # Extraemos las habilidades
-            abilities = []
-            for ability_data in api_response.get('abilities', []):
-                abilities.append({
-                    "name": ability_data['ability']['name'],
-                    "is_hidden": ability_data['is_hidden']
-                })
-                
-            abilities_data = {
-                "name": api_response['name'].capitalize(),
-                "number": str(api_response['id']),
-                "abilities": abilities
-            }
-            return self._json_response(abilities_data)
-            
-        except urllib.error.HTTPError as err:
-            if err.code == 404:
-                return self._error_response("Pokémon no encontrado", 404)
-            return self._error_response("Error al consultar PokeAPI", 502)
-        except Exception as err:
-            print(f"Error al consultar PokeAPI: {err}")
-            return self._error_response("Error interno del servidor", 500)
-
-
+        return self._json_response({
+            "name": api_response['name'].capitalize(),
+            "number": str(api_response['id']),
+            "abilities": abilities
+        })
