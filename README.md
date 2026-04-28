@@ -1,4 +1,4 @@
-# Proyecto Final - Clean Code (Pokédex API Wrapper)
+# Proyecto Final - Clean Code (Pokédex API)
 
 Este repositorio contiene la entrega final para el curso de Clean Code de Mastermind. El proyecto es una aplicación web basada en Django que actúa como un wrapper y cliente interactivo de la PokeAPI externa, aplicando estrictamente los principios de código limpio, arquitectura de software y manejo de errores.
 
@@ -60,3 +60,4 @@ Durante el desarrollo se tomaron decisiones estrictas basadas en los lineamiento
 6. Acceder a `http://127.0.0.1:8000/` en el navegador.
 
 ---
+*Documentación generada para la entrega del proyecto final.*
